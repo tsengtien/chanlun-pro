@@ -1,15 +1,19 @@
-import math
-import time
-import warnings
-from typing import Union
+import math, time
+import threading
 
+import tqsdk
 from tenacity import retry, stop_after_attempt, wait_random, retry_if_result
-from tqsdk import TqApi, TqAuth, TqAccount, TqKq
-from tqsdk.objs import Account, Position, Order
+from tqsdk.objs import Account, Position, Quote
 
 from chanlun import config
 from chanlun.exchange.exchange import *
-from chanlun.fun import get_logger
+from chanlun import fun
+
+# 全局的变量
+g_api: tqsdk.TqApi = None
+g_account: tqsdk.TqAccount = None
+g_account_enable: bool = False
+g_all_stocks = []
 
 
 class ExchangeTq(Exchange):
@@ -17,19 +21,23 @@ class ExchangeTq(Exchange):
     天勤期货行情
     """
 
-    def __init__(self, use_account=False):
-        # 是否连接交易账号，如果是需要执行交易的情况下，必须是 True
-        self.use_account = use_account
+    def __init__(self, use_simulate_account=True):
+        # 是否使用模拟账号，进行交易测试（这种模式无需设置实盘账号）
+        self.use_simulate_account = use_simulate_account
 
-        # tq api 对象
-        self.g_api: Union[TqApi, None] = None
-        self.g_account: Union[TqAccount, None] = None
-        self.g_all_stocks = []
-
-        self.log = get_logger()
-
-        # 设置时区
-        self.tz = pytz.timezone('Asia/Shanghai')
+        # 命令任务队列
+        self.command_tasks: List[str] = []
+        # 记录已经收到并执行的命令
+        self.past_commands = []
+        # K线返回对象
+        self.res_klines: Dict[str, pd.DataFrame] = {}
+        # Tick 返回对象
+        self.res_ticks: Dict[str, Quote] = {}
+        
+        # 运行的子进程
+        self.stop_thread = False
+        self.t = threading.Thread(target=self.thread_run_tasks)
+        self.t.start()
 
     def default_code(self):
         return 'KQ.m@SHFE.rb'
@@ -41,64 +49,146 @@ class ExchangeTq(Exchange):
             '10m': '10m', '6m': '6m', '5m': '5m', '3m': '3m', '2m': '2m', '1m': '1m',
             '30s': '30s', '10s': '10s'
         }
-
-    def get_api(self) -> TqApi:
-        """
-        获取 天勤API 对象
-        """
-        if self.g_api is None:
-            account = None
-            if self.use_account:
-                account = self.get_account()
-                if account is None:
-                    raise Exception('天勤开启交易，但是实例化账户信息失败')
-            self.g_api = TqApi(account=account, auth=TqAuth(config.TQ_USER, config.TQ_PWD))
-
-        return self.g_api
-
-    def close_api(self) -> bool:
-        if self.g_api is not None:
-            self.g_api.close()
-            self.g_api = None
+    
+    def close_task_thread(self):
+        self.stop_thread = True
+        time.sleep(1)
+        return True
+    
+    def restart_task_thread(self):
+        self.close_task_thread()
+        time.sleep(2)
+        self.stop_thread = False
+        self.t = threading.Thread(target=self.thread_run_tasks)
+        self.t.start()
         return True
 
-    def get_account(self) -> Union[TqKq, TqAccount, None]:
+    def thread_run_tasks(self):
+        """
+        子进程发送并更新行情请求
+        """
+        print('启动天勤子进程任务-更新K线与tick数据')
+
+        async def get_tick(code):
+            quote = await self.get_api().get_quote(code)
+            self.res_ticks[code] = quote
+            async with self.get_api().register_update_notify() as update_chan:
+                async for _ in update_chan:
+                    if self.get_api().is_changing(quote):
+                        # print(f'Tick {code} 更新信息：', quote)
+                        self.res_ticks[code] = quote
+
+        async def get_kline(code, frequency):
+            kline = await self.get_api().get_kline_serial(code, duration_seconds=frequency, data_length=8000)
+            self.res_klines[f'{code}_{frequency}'] = kline
+            async with self.get_api().register_update_notify() as update_chan:
+                async for _ in update_chan:
+                    if self.get_api().is_changing(kline):
+                        # print(f'Kline {code} {frequency} 更新信息：', len(kline))
+                        self.res_klines[f'{code}_{frequency}'] = kline
+
+        def reset_api(force: bool = False):
+            print('天勤 : 重启服务')
+            try:
+                self.close_api()
+            except Exception:
+                pass
+            self.res_klines = {}
+            self.res_ticks = {}
+            self.past_commands = []
+
+        while True:
+            try:
+                if self.stop_thread:
+                    print('退出天勤任务子线程')
+                    break
+                while len(self.command_tasks) > 0:
+                    commands = self.command_tasks.pop()
+                    if commands in self.past_commands:
+                        continue
+                    self.past_commands.append(commands)
+                    commands = commands.split(':')
+                    if commands[0] == 'kline':
+                        print('执行 Kline 命令：', ':'.join(commands))
+                        self.get_api().create_task(get_kline(commands[1], int(commands[2])))
+                    elif commands[0] == 'tick':
+                        print('执行 Tick 命令：', ':'.join(commands))
+                        self.get_api().create_task(get_tick(commands[1]))
+                self.get_api().wait_update(time.time() + 1)
+            except Exception as e:
+                print(f'天勤 循环等待更新行情数据异常 {e}，重启')
+                reset_api(force=True)
+                time.sleep(5)
+
+    def get_api(self, use_account=False):
+        """
+        获取 天勤API 对象
+        use_account : 标记是否使用账户对象，在特殊时间，账户是无法登录的，这时候只能使用行情服务，使用账户则会报错
+        """
+        global g_api, g_account_enable
+        # 这时候使用账户模式，但是账户并不可用，尝试关闭 API，并重新创建 账户 API 连接
+        if use_account is True and g_account_enable is False and g_api is not None:
+            g_api.close()
+            g_api = None
+
+        if g_api is None:
+            account = self.get_account()
+            if use_account and account is None:
+                raise Exception('使用实盘账户操作，但是并没有配置实盘账户，请检查实盘配置')
+            try:
+                g_api = tqsdk.TqApi(account=account, auth=tqsdk.TqAuth(config.TQ_USER, config.TQ_PWD))
+                g_account_enable = True
+            except Exception as e:
+                print('初始化默认的天勤 API 报错，重新尝试初始化无账户的 API：', {str(e)})
+                g_api = tqsdk.TqApi(auth=tqsdk.TqAuth(config.TQ_USER, config.TQ_PWD))
+                g_account_enable = False
+
+        return g_api
+
+    @staticmethod
+    def close_api():
+        global g_api
+        if g_api is not None:
+            g_api.close()
+            g_api = None
+        return True
+
+    def get_account(self):
+        global g_account
         # 使用快期的模拟账号
-        # if self.g_account is None:
-        #     self.g_account = TqKq()
-        # return self.g_account
+        if self.use_simulate_account:
+            if g_account is None:
+                g_account = tqsdk.TqKq()
+            return g_account
 
         # 天勤的实盘账号，如果有设置则使用
         if config.TQ_SP_ACCOUNT == '':
             return None
-        if self.g_account is None:
-            self.g_account = TqAccount(config.TQ_SP_NAME, config.TQ_SP_ACCOUNT, config.TQ_SP_PWD)
-        return self.g_account
-
-    def t_wait(self):
-        return self.get_api().wait_update(deadline=time.time() + 2)
+        if g_account is None:
+            g_account = tqsdk.TqAccount(config.TQ_SP_NAME, config.TQ_SP_ACCOUNT, config.TQ_SP_PWD)
+        return g_account
 
     def all_stocks(self):
         """
         获取支持的所有股票列表
         :return:
         """
-        if len(self.g_all_stocks) > 0:
-            return self.g_all_stocks
+        global g_all_stocks
+        if len(g_all_stocks) > 0:
+            return g_all_stocks
 
         codes = []
         for c in ['FUTURE', 'CONT']:
             codes += self.get_api().query_quotes(ins_class=c)
         infos = self.get_api().query_symbol_info(codes)
-        self.t_wait()
 
         for code in codes:
-            self.g_all_stocks.append(
+            g_all_stocks.append(
                 {'code': code, 'name': infos[infos['instrument_id'] == code].iloc[0]['instrument_name']}
             )
-        return self.g_all_stocks
+        return g_all_stocks
 
-    @retry(stop=stop_after_attempt(3), wait=wait_random(min=1, max=2), retry=retry_if_result(lambda _r: _r is None))
+    @retry(stop=stop_after_attempt(3), wait=wait_random(min=1, max=5), retry=retry_if_result(lambda _r: _r is None))
     def klines(self, code: str, frequency: str,
                start_date: str = None, end_date: str = None,
                args=None) -> [pd.DataFrame, None]:
@@ -114,50 +204,36 @@ class ExchangeTq(Exchange):
         if args is None:
             args = {}
         if 'limit' not in args.keys():
-            args['limit'] = 8000
+            args['limit'] = 2000
         frequency_maps = {
-            'w': 7 * 24 * 60 * 60, 'd': 24 * 60 * 60, '120m': 2 * 60 * 60, '60m': 60 * 60, '30m': 30 * 60,
-            '15m': 15 * 60,
+            'w': 7 * 24 * 60 * 60, 'd': 24 * 60 * 60, '60m': 60 * 60, '30m': 30 * 60, '15m': 15 * 60,
             '10m': 10 * 60, '6m': 6 * 60, '5m': 5 * 60, '3m': 3 * 60, '2m': 2 * 60, '1m': 1 * 60,
             '30s': 30, '10s': 10
         }
-        # if start_date is not None and end_date is not None:
-        #     raise Exception('期货行情不支持历史数据查询，因为账号不是专业版，没权限')
+        if start_date is not None and end_date is not None:
+            raise Exception('期货行情不支持历史数据查询，因为账号不是专业版，没权限')
 
+        # 添加命令
+        kline_key = f'{code}_{frequency_maps[frequency]}'
+        self.command_tasks.append(f'kline:{code}:{frequency_maps[frequency]}')
         # 获取返回的K线
-        ks = None
-        try_nums = 3
-        for i in range(try_nums):
-            try:
-                if start_date is not None or end_date is not None:
-                    ks = self.get_api().get_kline_data_series(code, frequency_maps[frequency], start_date, end_date)
-                else:
-                    ks = self.get_api().get_kline_serial(code, frequency_maps[frequency], args['limit'])
-                self.t_wait()
-                if ks is not None and len(ks) > 0:
-                    break
-            except Exception as e:
-                self.log.error(f'{code} - {frequency} error : {e} 再次重试')
+        klines = None
+        try_nums = 0
+        while True:
+            if kline_key not in self.res_klines.keys():
                 time.sleep(1)
-
-        if ks is None:
+                try_nums += 1
+                if try_nums > 5:  # 5秒后没有结果直接返回空
+                    return None
+                continue
+            klines = self.res_klines[kline_key]
+            break
+        if klines is None:
             return None
-        ks = ks.dropna()
-        if len(ks) == 0:
-            return None
+        klines.loc[:, 'date'] = klines['datetime'].apply(lambda x: datetime.datetime.fromtimestamp(x / 1e9))
+        klines.loc[:, 'code'] = code
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            ks.loc[:, 'code'] = code
-            ks.loc[:, 'date'] = ks['datetime'].apply(
-                lambda x: datetime.datetime.fromtimestamp(x / 1e9, tz=self.tz)
-            )
-
-            if frequency in ['w', 'd']:
-                # 天勤数据是前对其的，将所有日期以上周期的时间设置为 9点
-                ks['date'] = ks['date'].apply(lambda _d: _d.replace(hour=9, minute=0))
-
-        return ks[['code', 'date', 'open', 'close', 'high', 'low', 'volume']]
+        return klines[['code', 'date', 'open', 'close', 'high', 'low', 'volume']]
 
     def ticks(self, codes: List[str]) -> Dict[str, Tick]:
         """
@@ -165,33 +241,35 @@ class ExchangeTq(Exchange):
         :param codes:
         :return:
         """
+        # 循环增加命令
+        for code in codes:
+            self.command_tasks.append(f'tick:{code}')
+        time.sleep(1)
         # 循环获取更新后的 tick
         res_ticks = {}
         for code in codes:
-            try_nums = 3
-            tick = None
-            for i in range(try_nums):
-                try:
-                    tick = self.get_api().get_quote(code)
-                    self.t_wait()
-                    break
-                except Exception as e:
-                    self.log.error(e)
+            try_nums = 0
+            while True:
+                if code not in self.res_ticks.keys():
                     time.sleep(1)
-            if tick is None:
-                continue
-            res_ticks[code] = Tick(
-                code=code,
-                last=0 if math.isnan(tick['last_price']) else tick['last_price'],
-                buy1=0 if math.isnan(tick['bid_price1']) else tick['bid_price1'],
-                sell1=0 if math.isnan(tick['ask_price1']) else tick['ask_price1'],
-                high=0 if math.isnan(tick['highest']) else tick['highest'],
-                low=0 if math.isnan(tick['lowest']) else tick['lowest'],
-                open=0 if math.isnan(tick['open']) else tick['open'],
-                volume=0 if math.isnan(tick['volume']) else tick['volume'],
-                rate=0 if math.isnan(tick['pre_settlement']) or math.isnan(tick['last_price']) else round(
-                    (tick['last_price'] - tick['pre_settlement']) / tick['pre_settlement'] * 100, 2)
-            )
+                    try_nums += 1
+                    if try_nums > 3:
+                        break
+                    continue
+                tick = self.res_ticks[code]
+                res_ticks[code] = Tick(
+                    code=code,
+                    last=0 if math.isnan(tick['last_price']) else tick['last_price'],
+                    buy1=0 if math.isnan(tick['bid_price1']) else tick['bid_price1'],
+                    sell1=0 if math.isnan(tick['ask_price1']) else tick['ask_price1'],
+                    high=0 if math.isnan(tick['highest']) else tick['highest'],
+                    low=0 if math.isnan(tick['lowest']) else tick['lowest'],
+                    open=0 if math.isnan(tick['open']) else tick['open'],
+                    volume=0 if math.isnan(tick['volume']) else tick['volume'],
+                    rate=0 if math.isnan(tick['pre_settlement']) else round(
+                        (tick['last_price'] - tick['pre_settlement']) / tick['pre_settlement'] * 100, 2)
+                )
+                break
         return res_ticks
 
     def stock_info(self, code: str) -> [Dict, None]:
@@ -214,46 +292,40 @@ class ExchangeTq(Exchange):
             return True
         return False
 
-    def balance(self) -> Union[Account, None]:
+    def balance(self) -> Account:
         """
         获取账户资产
         """
-        try_nums = 5
-        for _ in range(try_nums):
-            try:
-                acc = self.get_api().get_account()
-                self.t_wait()
-                return acc
-            except Exception as e:
-                self.log.error(f'天勤获取账户资产异常 {e}')
-                time.sleep(2)
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
 
-        return None
+        account = api.get_account()
+        api.wait_update(time.time() + 2)
+        return account
 
     def positions(self, code: str = None) -> Dict[str, Position]:
         """
         获取持仓
         """
-        for _ in range(5):
-            try:
-                if code is None:
-                    positions = self.get_api().get_position(symbol=code)
-                    self.t_wait()
-                    return {
-                        _code: positions[_code] for _code in positions.keys()
-                        if positions[_code]['pos_long'] != 0 or positions[_code]['pos_short'] != 0
-                    }
-                else:
-                    positions = self.get_api().get_position(symbol=code)
-                    self.t_wait()
-                    if positions['pos_long'] != 0 or positions['pos_short'] != 0:
-                        return {code: positions}
-                    else:
-                        return {}
-            except Exception as e:
-                self.log.error(f'天勤获取持仓 {code} 异常 {e}')
-                time.sleep(1)
-        return {}
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
+
+        positions = api.get_position(symbol=code)
+        api.wait_update(time.time() + 2)
+        if isinstance(positions, Position):
+            if positions['pos_long'] != 0 or positions['pos_short'] != 0:
+                return {code: positions}
+            else:
+                return {}
+        else:
+            return {
+                _code: positions[_code] for _code in positions.keys()
+                if positions[_code]['pos_long'] != 0 or positions[_code]['pos_short'] != 0
+            }
 
     def order(self, code: str, o_type: str, amount: float, args=None):
         """
@@ -276,6 +348,11 @@ class ExchangeTq(Exchange):
             offset = 'CLOSE'
         else:
             raise Exception('期货下单类型错误')
+
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
 
         # 查询持仓
         if offset == 'CLOSE':
@@ -309,35 +386,34 @@ class ExchangeTq(Exchange):
 
         order = None
 
-        try_nums = 0
         amount_left = amount
         while amount_left > 0:
-            try:
-                quote = self.get_api().get_quote(code)
-                self.t_wait()
-                price = quote.ask_price1 if direction == 'BUY' else quote.bid_price1
-                if price is None:
-                    continue
-                order = self.get_api().insert_order(code,
-                                                    direction=direction,
-                                                    offset=offset,
-                                                    volume=int(amount_left),
-                                                    limit_price=price,
-                                                    )
-                self.t_wait()
-                time.sleep(2)
-                if order.status == 'ALIVE':
-                    # 取消订单，未成交的部分继续挂单
-                    self.cancel_order(order)
+
+            quote = api.get_quote(code)
+            api.wait_update(time.time() + 2)
+            price = quote.ask_price1 if direction == 'BUY' else quote.bid_price1
+            if price is None:
+                continue
+            order = api.insert_order(code,
+                                     direction=direction,
+                                     offset=offset,
+                                     volume=int(amount_left),
+                                     limit_price=price,
+                                     )
+            api.wait_update(time.time() + 5)
+
+            if order.status == 'FINISHED':
                 if order.is_error:
-                    self.log.error(f'{code} {o_type}下单失败，原因：{order.last_msg}')
+                    print(f'下单失败，原因：{order.last_msg}')
+                    return False
+                break
+            else:
+                # 取消订单，未成交的部分继续挂单
+                self.cancel_order(order)
+                if order.is_error:
+                    print(f'下单失败，原因：{order.last_msg}')
                     return False
                 amount_left = order.volume_left
-            except Exception as e:
-                self.log.error(f'下单异常 {e} 重试')
-                try_nums += 1
-                if try_nums >= 8:
-                    return False
 
         if order is None:
             return False
@@ -348,27 +424,55 @@ class ExchangeTq(Exchange):
         """
         获取所有订单 (有效订单)
         """
-        raise Exception('不提供查询所有订单的功能')
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
+
+        orders = api.get_order()
+        api.wait_update(time.time() + 5)
+
+        res_orders = []
+        for _id in orders:
+            _o = orders[_id]
+            if _o.status == 'ALIVE':
+                res_orders.append(_o)
+
+        return res_orders
 
     def cancel_all_orders(self):
         """
         撤销所有订单
         """
-        raise Exception('不提供取消所有订单的功能')
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
 
-    def cancel_order(self, order: Order):
+        orders = api.get_order()
+        api.wait_update(time.time() + 2)
+        for _id in orders:
+            _o = orders[_id]
+            if _o.status == 'ALIVE':
+                # 有效的订单，进行撤单处理
+                self.cancel_order(_o)
+
+        return True
+
+    def cancel_order(self, order):
         """
         取消订单，直到订单取消成功
         """
+        global g_account_enable
+        api = self.get_api(use_account=True)
+        if g_account_enable is False:
+            raise Exception('账户链接失败，暂时不可用，请稍后尝试')
+
         while True:
-            try:
-                self.get_api().cancel_order(order.order_id)
-                self.t_wait()
-                time.sleep(2)
-                if order.status == 'FINISHED' or order.is_dead:
-                    break
-            except Exception as e:
-                self.log.error(f'天勤取消订单 {order.order_id} 异常 {e} 重试')
+            api.cancel_order(order)
+            api.wait_update(time.time() + 2)
+            if order.status == 'FINISHED':
+                break
 
         return None
 
@@ -380,21 +484,28 @@ class ExchangeTq(Exchange):
 
 
 if __name__ == '__main__':
-    from chanlun import fun
+    
     ex = ExchangeTq()
+    ex.close_task_thread()
+    ex.restart_task_thread()
+    ex.close_task_thread()
+    ex.close_api()
+    print('Done')
+
     
     # print(ex.all_stocks())
     
     # main_codes = ex.get_api().query_cont_quotes()
     # print(main_codes)
 
-    klines = ex.klines('KQ.m@SHFE.ss', '1m')
+    # klines = ex.klines('KQ.m@SHFE.ss', '1m')
 
-    klines = klines[klines['date'] <= '2023-10-16 15:00:00']
+    # klines = klines[klines['date'] <= '2023-10-16 15:00:00']
     
-    print(len(klines), klines.tail(20))
+    # print(len(klines), klines.tail(20))
 
     # tick = ex.ticks(['DCE.l2401'])
     # print(tick)
 
     # ex.close_api()
+

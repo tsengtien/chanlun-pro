@@ -311,10 +311,10 @@ class BackTestKlines(MarketDatas):
             },
             'futures': {
                 'd': 5000, '120m': 500, '4h': 500, 
-                '60m': 500, '30m': 500, '15m': 480, '10m': 240, '5m': 300, '1m': 60,
+                '60m': 500, '30m': 500, '15m': 480, '10m': 240, '6m': 300, '5m': 300, '1m': 60,
             },
         }
-        for _freq in ['w', 'd', '120m', '4h', '60m', '30m', '15m', '10m', '8m', '5m', '1m']:
+        for _freq in ['w', 'd', '120m', '4h', '60m', '30m', '15m', '10m', '8m', '6m', '5m', '1m']:
             if _freq == frequency:
                 return (start_date - datetime.timedelta(days=market_days_freq_maps[self.market][_freq])).strftime(
                     self.time_fmt)
