@@ -522,24 +522,28 @@
                     let from = visible_range['from'];
                     let to = visible_range['to'];
 
-                    let key_all = []
+                    let symbol_key = symbolInterval['symbol'].toString() + '_' + symbolInterval['interval'].toString();
+                    let key_all = [];
+                    if (obj_charts[symbol_key] === undefined) {
+                        obj_charts[symbol_key] = {};
+                    }
                     // 删除时间最大的几个画图对象
                     for (const c_key of ['fxs', 'bis', 'xds', 'zsds', 'bi_zss', 'xd_zss', 'bcs', 'mmds']) {
-                        if (obj_charts[c_key] != undefined) {
-                            obj_charts[c_key].sort(function(a, b) {return a['time'] - b['time']});
-                            if (obj_charts[c_key].length >= 1) {
-                                var o = obj_charts[c_key].pop();
+                        if (obj_charts[symbol_key][c_key] != undefined) {
+                            obj_charts[symbol_key][c_key].sort(function(a, b) {return a['time'] - b['time']});
+                            if (obj_charts[symbol_key][c_key].length >= 1) {
+                                var o = obj_charts[symbol_key][c_key].pop();
                                 chart.removeEntity(o['id']);
                             }
-                            if (obj_charts[c_key].length >= 1) {
-                                var o = obj_charts[c_key].pop();
+                            if (obj_charts[symbol_key][c_key].length >= 1) {
+                                var o = obj_charts[symbol_key][c_key].pop();
                                 chart.removeEntity(o['id']);
                             }
-                            for (const c_val of obj_charts[c_key]) {
+                            for (const c_val of obj_charts[symbol_key][c_key]) {
                                 key_all.push(c_val['key']);
                             }
                         } else {
-                            obj_charts[c_key] = [];
+                            obj_charts[symbol_key][c_key] = [];
                         }
                     }
 
@@ -551,7 +555,7 @@
                                 return true;
                             }
                             if (fx['text'] === 'ding') {
-                                obj_charts['fxs'].push({
+                                obj_charts[symbol_key]['fxs'].push({
                                     'time': fx['points'][0].time,
                                     'key': key,
                                     'id': chart.createMultipointShape(fx['points'], {
@@ -569,7 +573,7 @@
                                     })
                                 });
                             } else {
-                                obj_charts['fxs'].push({
+                                obj_charts[symbol_key]['fxs'].push({
                                     'time': fx['points'][0].time,
                                     'key': key,
                                     'id': chart.createMultipointShape(fx['points'], {
@@ -596,7 +600,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['bis'].push({
+                            obj_charts[symbol_key]['bis'].push({
                                 'time': bi['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(bi['points'], {
@@ -622,7 +626,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['xds'].push({
+                            obj_charts[symbol_key]['xds'].push({
                                 'time': xd['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(xd['points'], {
@@ -648,7 +652,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['zsds'].push({
+                            obj_charts[symbol_key]['zsds'].push({
                                 'time': zsd['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(zsd['points'], {
@@ -674,7 +678,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['bi_zss'].push({
+                            obj_charts[symbol_key]['bi_zss'].push({
                                 'time': bi_zs['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(bi_zs['points'], {
@@ -706,7 +710,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['xd_zss'].push({
+                            obj_charts[symbol_key]['xd_zss'].push({
                                 'time': xd_zs['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(xd_zs['points'], {
@@ -739,7 +743,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['zsd_zss'].push({
+                            obj_charts[symbol_key]['zsd_zss'].push({
                                 'time': zsd_zs['points'][0].time,
                                 'key': key,
                                 'id': chart.createMultipointShape(zsd_zs['points'], {
@@ -771,7 +775,7 @@
                             if (key_all.includes(key)) {
                                 return true;
                             }
-                            obj_charts['bcs'].push({
+                            obj_charts[symbol_key]['bcs'].push({
                                 'time': bc['points'].time,
                                 'key': key,
                                 'id': chart.createShape(bc['points'], {
@@ -802,7 +806,7 @@
                                 return true;
                             }
                             if (mmd['text'].search('B') > 0) {
-                                obj_charts['mmds'].push({
+                                obj_charts[symbol_key]['mmds'].push({
                                     'time': mmd['points'].time,
                                     'key': key,
                                     'id': chart.createShape(mmd['points'], {
@@ -823,7 +827,7 @@
                                     }),
                                 });
                             } else {
-                                obj_charts['mmds'].push({
+                                obj_charts[symbol_key]['mmds'].push({
                                     'time': mmd['points'].time,
                                     'key': key,
                                     'id': chart.createShape(mmd['points'], {
@@ -847,7 +851,7 @@
                         }
                     });
                     const code_end = performance.now();
-                    console.log(`运行时间:${code_end - code_start} 毫秒`)
+                    console.log(`${symbol_key} 运行时间:${code_end - code_start} 毫秒`)
                 }
             });
 
