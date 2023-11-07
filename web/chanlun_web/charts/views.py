@@ -133,6 +133,7 @@ def search_code_json(request):
         res = ex.search_stocks(search)
     else:
         all_stocks = ex.all_stocks()
+        # print(f'{market} search : {search} , market all stocks {all_stocks}')
         res = [
             stock for stock in all_stocks
             if search.lower() in stock['code'].lower() or search.lower() in stock[

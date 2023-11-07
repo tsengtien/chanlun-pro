@@ -248,25 +248,18 @@
         // 图表展示
         function show_tv_chart(id) {
             var widget, udf_datafeed;
-            var obj_fxs = [];
-            var obj_bis = [];
-            var obj_xds = [];
-            var obj_zsds = [];
-            var obj_bi_zss = [];
-            var obj_xd_zss = [];
-            var obj_zsd_zss = [];
-            var obj_bcs = [];
-            var obj_mmds = [];
+            var obj_charts = {};
 
-            let device = layui.device()
+            // 手机版禁用的功能
+            // let device = layui.device()
             let disabled_features = ["go_to_date"];
-            if (device.mobile) {
-                disabled_features = [
-                    'use_localstorage_for_settings',
-                    'left_toolbar', 'header_widget', 'timeframes_toolbar', 'edit_buttons_in_legend',
-                    'context_menus', 'control_bar', 'border_around_the_chart'
-                ];
-            }
+            // if (device.mobile) {
+            //     disabled_features = [
+            //         'use_localstorage_for_settings',
+            //         'left_toolbar', 'header_widget', 'timeframes_toolbar', 'edit_buttons_in_legend',
+            //         'context_menus', 'control_bar', 'border_around_the_chart'
+            //     ];
+            // }
 
             udf_datafeed = new Datafeeds.UDFCompatibleDatafeed('/tv', 30000)
             widget = window.tvWidget = new TradingView.widget({
@@ -467,9 +460,7 @@
 
             widget.onChartReady(function () {
                 let chart = widget.activeChart();
-                let visible_min_from = 9999999999;
                 chart.onSymbolChanged().subscribe(null, function (symbol) {
-                    visible_min_from = 9999999999;
                     let ticker = symbol['ticker'];
                     set_local_data('market', ticker.split(':')[0]);
                     set_local_data(ticker.split(':')[0] + '_code', ticker.split(':')[1]);
@@ -480,27 +471,31 @@
                     market = ticker.split(':')[0];
                     code = ticker.split(':')[1];
                     console.log(id + ' 标的变化：' + symbol['ticker']);
+                    obj_charts = {};
                     render_zixuan_opts();
+                    setTimeout(draw_chanlun, 1500);
                 });
                 chart.onIntervalChanged().subscribe(null, function (interval) {
-                    visible_min_from = 9999999999;
                     set_local_data(market + '_interval_' + id, interval);
+                    obj_charts = {};
                     console.log(id + '周期变化 : ' + interval);
+                    setTimeout(draw_chanlun, 1500);
                 });
                 chart.onDataLoaded().subscribe(
                     null,
                     function (d) {
                         console.log('数据重新加载');
+                        obj_charts = {};
                         draw_chanlun();
                     },
                     true
                 );
-                chart.dataReady(() => {
+                chart.dataReady(function() {
                     console.log('数据准备');
+                    draw_chanlun();
                 });
                 widget.subscribe('onTick', function (d) {
                     // Bar 更新，图表也进行更新
-                    visible_min_from = 9999999999;
                     console.log('数据更新');
                     draw_chanlun();
                 });
@@ -510,284 +505,348 @@
                 });
 
                 function draw_chanlun() {
+                    const code_start = performance.now();
+                    
+                    let symbolInterval = widget.symbolInterval();
+                    let bars_result = udf_datafeed._historyProvider.bars_result.get(symbolInterval['symbol'].toString().toLowerCase());
+                    if (bars_result === undefined) {
+                        return true;
+                    }
+                    bars_result = bars_result.get(symbolInterval['interval'].toString().toLowerCase());
+                    // console.log(symbolInterval);
+                    // console.log(bars_result);
+                    
                     // 画缠论图表
                     let visible_range = chart.getVisibleRange();
                     let from = visible_range['from'];
                     let to = visible_range['to'];
-                    // let from = 0;
-                    // let to = 9999999999;
-                    if (from >= visible_min_from) {
-                        return;
-                    } else {
-                        visible_min_from = from;
-                    }
-                    console.log('删除图表，重新画图，可见范围：' + from + ':' + to);
 
-                    obj_fxs.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_bis.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_xds.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_zsds.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_bi_zss.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_xd_zss.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_zsd_zss.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_bcs.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_mmds.forEach(function (id) {
-                        chart.removeEntity(id)
-                    });
-                    obj_fxs = [];
-                    obj_bis = [];
-                    obj_xds = [];
-                    obj_zsds = [];
-                    obj_bi_zss = [];
-                    obj_xd_zss = [];
-                    obj_zsd_zss = [];
-                    obj_bcs = [];
-                    obj_mmds = [];
-                    let symbolInterval = widget.symbolInterval();
-                    let bars_result = udf_datafeed._historyProvider.bars_result.get(symbolInterval['symbol'].toString().toLowerCase());
-                    bars_result = bars_result.get(symbolInterval['interval'].toString().toLowerCase());
-                    // console.log(symbolInterval);
-                    // console.log(bars_result);
+                    let key_all = []
+                    // 删除时间最大的几个画图对象
+                    for (const c_key of ['fxs', 'bis', 'xds', 'zsds', 'bi_zss', 'xd_zss', 'bcs', 'mmds']) {
+                        if (obj_charts[c_key] != undefined) {
+                            obj_charts[c_key].sort(function(a, b) {return a['time'] - b['time']});
+                            if (obj_charts[c_key].length >= 1) {
+                                var o = obj_charts[c_key].pop();
+                                chart.removeEntity(o['id']);
+                            }
+                            if (obj_charts[c_key].length >= 1) {
+                                var o = obj_charts[c_key].pop();
+                                chart.removeEntity(o['id']);
+                            }
+                            for (const c_val of obj_charts[c_key]) {
+                                key_all.push(c_val['key']);
+                            }
+                        } else {
+                            obj_charts[c_key] = [];
+                        }
+                    }
+
                     //** 画分型
                     bars_result.fxs.forEach(function (fx) {
                         if (fx['points'][0].time >= from) {
+                            var key = JSON.stringify(fx);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
                             if (fx['text'] === 'ding') {
-                                obj_fxs.push(chart.createMultipointShape(fx['points'], {
-                                    shape: 'circle',
-                                    lock: true,
-                                    disableSelection: true,
-                                    disableSave: true,
-                                    disableUndo: true,
-                                    showInObjectsTree: false,
-                                    overrides: {
-                                        backgroundColor: '#FA8072',
-                                        color: '#FA8072',
-                                        linewidth: 4,
-                                    },
-                                }));
+                                obj_charts['fxs'].push({
+                                    'time': fx['points'][0].time,
+                                    'key': key,
+                                    'id': chart.createMultipointShape(fx['points'], {
+                                        shape: 'circle',
+                                        lock: true,
+                                        disableSelection: true,
+                                        disableSave: true,
+                                        disableUndo: true,
+                                        showInObjectsTree: false,
+                                        overrides: {
+                                            backgroundColor: '#FA8072',
+                                            color: '#FA8072',
+                                            linewidth: 4,
+                                        },
+                                    })
+                                });
                             } else {
-                                obj_fxs.push(chart.createMultipointShape(fx['points'], {
-                                    shape: 'circle',
-                                    lock: true,
-                                    disableSelection: true,
-                                    disableSave: true,
-                                    disableUndo: true,
-                                    showInObjectsTree: false,
-                                    overrides: {
-                                        backgroundColor: '#1E90FF',
-                                        color: '#1E90FF',
-                                        linewidth: 4,
-                                    },
-                                }));
+                                obj_charts['fxs'].push({
+                                    'time': fx['points'][0].time,
+                                    'key': key,
+                                    'id': chart.createMultipointShape(fx['points'], {
+                                        shape: 'circle',
+                                        lock: true,
+                                        disableSelection: true,
+                                        disableSave: true,
+                                        disableUndo: true,
+                                        showInObjectsTree: false,
+                                        overrides: {
+                                            backgroundColor: '#1E90FF',
+                                            color: '#1E90FF',
+                                            linewidth: 4,
+                                        },
+                                    }),
+                                });
                             }
                         }
                     }); //**/
                     // 画笔
                     bars_result.bis.forEach(function (bi) {
                         if (bi['points'][0].time >= from) {
-                            obj_bis.push(chart.createMultipointShape(bi['points'], {
-                                shape: 'trend_line',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    'linestyle': parseInt(bi['linestyle']),
-                                    'linewidth': 1,
-                                    'linecolor': '#708090',
-                                },
-                            }));
+                            var key = JSON.stringify(bi);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['bis'].push({
+                                'time': bi['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(bi['points'], {
+                                    shape: 'trend_line',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        'linestyle': parseInt(bi['linestyle']),
+                                        'linewidth': 1,
+                                        'linecolor': '#708090',
+                                    },
+                                })
+                            });
                         }
                     });
                     // 画线段
                     bars_result.xds.forEach(function (xd) {
                         if (xd['points'][0].time >= from) {
-                            obj_xds.push(chart.createMultipointShape(xd['points'], {
-                                shape: 'trend_line',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    'linestyle': parseInt(xd['linestyle']),
-                                    'linewidth': 2,
-                                    'linecolor': '#00BFFF',
-                                },
-                            }));
+                            var key = JSON.stringify(xd);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['xds'].push({
+                                'time': xd['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(xd['points'], {
+                                    shape: 'trend_line',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        'linestyle': parseInt(xd['linestyle']),
+                                        'linewidth': 2,
+                                        'linecolor': '#00BFFF',
+                                    },
+                                })
+                            });
                         }
                     });
                     // 画走势段
                     bars_result.zsds.forEach(function (zsd) {
                         if (zsd['points'][0].time >= from) {
-                            obj_zsds.push(chart.createMultipointShape(zsd['points'], {
-                                shape: 'trend_line',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    'linestyle': parseInt(zsd['linestyle']),
-                                    'linewidth': 3,
-                                    'linecolor': '#FFA710',
-                                },
-                            }));
+                            var key = JSON.stringify(zsd);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['zsds'].push({
+                                'time': zsd['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(zsd['points'], {
+                                    shape: 'trend_line',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        'linestyle': parseInt(zsd['linestyle']),
+                                        'linewidth': 3,
+                                        'linecolor': '#FFA710',
+                                    },
+                                })
+                            });
                         }
                     });
                     // 画笔中枢
-                    bars_result.bi_zss.forEach(function (bi_zss) {
-                        if (bi_zss['points'][0].time >= from) {
-                            obj_bi_zss.push(chart.createMultipointShape(bi_zss['points'], {
-                                shape: 'rectangle',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    'linestyle': parseInt(bi_zss['linestyle']),
-                                    'linewidth': 1,
-                                    'linecolor': '#708090',
-                                    'backgroundColor': '#708090',
-                                    'transparency': 95,
-                                    'color': '#708090',
-                                    'trendline.linecolor': '#708090',
-                                    'fillBackground': true,
-                                    'filled': true,
-                                },
-                            }));
+                    bars_result.bi_zss.forEach(function (bi_zs) {
+                        if (bi_zs['points'][0].time >= from) {
+                            var key = JSON.stringify(bi_zs);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['bi_zss'].push({
+                                'time': bi_zs['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(bi_zs['points'], {
+                                    shape: 'rectangle',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        'linestyle': parseInt(bi_zs['linestyle']),
+                                        'linewidth': 1,
+                                        'linecolor': '#708090',
+                                        'backgroundColor': '#708090',
+                                        'transparency': 95,
+                                        'color': '#708090',
+                                        'trendline.linecolor': '#708090',
+                                        'fillBackground': true,
+                                        'filled': true,
+                                    },
+                                })
+                            });
                         }
-
                     });
                     // 画线段中枢
-                    bars_result.xd_zss.forEach(function (xd_zss) {
-                        if (xd_zss['points'][0].time >= from) {
-                            obj_xd_zss.push(chart.createMultipointShape(xd_zss['points'], {
-                                shape: 'rectangle',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                filled: false,
-                                overrides: {
-                                    'linestyle': parseInt(xd_zss['linestyle']),
-                                    'linewidth': 2,
-                                    'color': '#00BFFF',
-                                    'trendline.linecolor': '#00BFFF',
-                                    'linecolor': '#00BFFF',
-                                    'backgroundColor': '#00BFFF',
-                                    'transparency': 90,
-                                    'fillBackground': true,
-                                    'filled': true,
-                                },
-                            }));
+                    bars_result.xd_zss.forEach(function (xd_zs) {
+                        if (xd_zs['points'][0].time >= from) {
+                            var key = JSON.stringify(xd_zs);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['xd_zss'].push({
+                                'time': xd_zs['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(xd_zs['points'], {
+                                    shape: 'rectangle',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    filled: false,
+                                    overrides: {
+                                        'linestyle': parseInt(xd_zs['linestyle']),
+                                        'linewidth': 2,
+                                        'color': '#00BFFF',
+                                        'trendline.linecolor': '#00BFFF',
+                                        'linecolor': '#00BFFF',
+                                        'backgroundColor': '#00BFFF',
+                                        'transparency': 90,
+                                        'fillBackground': true,
+                                        'filled': true,
+                                    },
+                                })
+                            });
                         }
                     });
                     // 画走势段中枢
-                    bars_result.zsd_zss.forEach(function (zsd_zss) {
-                        if (zsd_zss['points'][0].time >= from) {
-                            obj_xd_zss.push(chart.createMultipointShape(zsd_zss['points'], {
-                                shape: 'rectangle',
-                                lock: true,
-                                disableSelection: true,
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    'linestyle': parseInt(zsd_zss['linestyle']),
-                                    'linewidth': 3,
-                                    'linecolor': '#FFA710',
-                                    'backgroundColor': '#FFA710',
-                                    'transparency': 90,
-                                    'color': '#FFA710',
-                                    'trendline.linecolor': '#FFA710',
-                                    'fillBackground': true,
-                                    'filled': true,
-                                },
-                            }));
+                    bars_result.zsd_zss.forEach(function (zsd_zs) {
+                        if (zsd_zs['points'][0].time >= from) {
+                            var key = JSON.stringify(zsd_zs);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['zsd_zss'].push({
+                                'time': zsd_zs['points'][0].time,
+                                'key': key,
+                                'id': chart.createMultipointShape(zsd_zs['points'], {
+                                    shape: 'rectangle',
+                                    lock: true,
+                                    disableSelection: true,
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        'linestyle': parseInt(zsd_zs['linestyle']),
+                                        'linewidth': 3,
+                                        'linecolor': '#FFA710',
+                                        'backgroundColor': '#FFA710',
+                                        'transparency': 90,
+                                        'color': '#FFA710',
+                                        'trendline.linecolor': '#FFA710',
+                                        'fillBackground': true,
+                                        'filled': true,
+                                    },
+                                })
+                            });
                         }
                     });
                     // 画背驰
                     bars_result.bcs.forEach(function (bc) {
                         if (bc['points'].time >= from) {
-                            obj_bcs.push(chart.createShape(bc['points'], {
-                                shape: 'balloon',
-                                lock: true,
-                                text: bc['text'],
-                                {#disableSelection: true,#}
-                                disableSave: true,
-                                disableUndo: true,
-                                showInObjectsTree: false,
-                                overrides: {
-                                    markerColor: '#D1D4DC',
-                                    backgroundColor: '#D1D4DC',
-                                    textColor: '#fccbcd',
-                                    transparency: 70,
-                                    backgroundTransparency: 70,
-                                    fontsize: 12,
-                                },
-                            }));
+                            var key = JSON.stringify(bc);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
+                            obj_charts['bcs'].push({
+                                'time': bc['points'].time,
+                                'key': key,
+                                'id': chart.createShape(bc['points'], {
+                                    shape: 'balloon',
+                                    lock: true,
+                                    text: bc['text'],
+                                    {#disableSelection: true,#}
+                                    disableSave: true,
+                                    disableUndo: true,
+                                    showInObjectsTree: false,
+                                    overrides: {
+                                        markerColor: '#D1D4DC',
+                                        backgroundColor: '#D1D4DC',
+                                        textColor: '#fccbcd',
+                                        transparency: 70,
+                                        backgroundTransparency: 70,
+                                        fontsize: 12,
+                                    },
+                                }),
+                            });
                         }
                     });
                     // 画买卖点
                     bars_result.mmds.forEach(function (mmd) {
                         if (mmd['points'].time >= from) {
+                            var key = JSON.stringify(mmd);
+                            if (key_all.includes(key)) {
+                                return true;
+                            }
                             if (mmd['text'].search('B') > 0) {
-                                obj_mmds.push(chart.createShape(mmd['points'], {
-                                    shape: 'arrow_up',
-                                    lock: true,
-                                    text: mmd['text'],
-                                    disableSelection: true,
-                                    disableSave: true,
-                                    disableUndo: true,
-                                    showInObjectsTree: false,
-                                    overrides: {
-                                        markerColor: '#FA8072',
-                                        backgroundColor: '#FA8072',
-                                        color: '#FA8072',
-                                        fontsize: 12,
-                                        transparency: 80,
-                                    },
-                                }));
+                                obj_charts['bcs'].push({
+                                    'time': mmd['points'].time,
+                                    'key': key,
+                                    'id': chart.createShape(mmd['points'], {
+                                        shape: 'arrow_up',
+                                        lock: true,
+                                        text: mmd['text'],
+                                        disableSelection: true,
+                                        disableSave: true,
+                                        disableUndo: true,
+                                        showInObjectsTree: false,
+                                        overrides: {
+                                            markerColor: '#FA8072',
+                                            backgroundColor: '#FA8072',
+                                            color: '#FA8072',
+                                            fontsize: 12,
+                                            transparency: 80,
+                                        },
+                                    }),
+                                });
                             } else {
-                                obj_mmds.push(chart.createShape(mmd['points'], {
-                                    shape: 'arrow_down',
-                                    lock: true,
-                                    text: mmd['text'],
-                                    disableSelection: true,
-                                    disableSave: true,
-                                    disableUndo: true,
-                                    showInObjectsTree: false,
-                                    overrides: {
-                                        markerColor: '#1E90FF',
-                                        backgroundColor: '#1E90FF',
-                                        color: '#1E90FF',
-                                        fontsize: 12,
-                                        transparency: 80,
-                                    },
-                                }));
+                                obj_charts['bcs'].push({
+                                    'time': mmd['points'].time,
+                                    'key': key,
+                                    'id': chart.createShape(mmd['points'], {
+                                        shape: 'arrow_down',
+                                        lock: true,
+                                        text: mmd['text'],
+                                        disableSelection: true,
+                                        disableSave: true,
+                                        disableUndo: true,
+                                        showInObjectsTree: false,
+                                        overrides: {
+                                            markerColor: '#1E90FF',
+                                            backgroundColor: '#1E90FF',
+                                            color: '#1E90FF',
+                                            fontsize: 12,
+                                            transparency: 80,
+                                        },
+                                    }),
+                                });
                             }
                         }
                     });
+                    const code_end = performance.now();
+                    console.log(`运行时间:${code_end - code_start} 毫秒`)
                 }
             });
 
@@ -1375,7 +1434,6 @@
             {#console.log(chart_widgets);#}
 
             render_zixuan_opts();
-            change_chart_ticker(market, code);
         }
 
         init_web();

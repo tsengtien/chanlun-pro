@@ -175,30 +175,38 @@ def run_tasks(client_id: int):
             ], 0)
             s_time = time.time()
             args: dict = json.loads(args)
+            info = ''
             if cmd == CmdEnum.SEARCH_STOCKS.value:
                 # log.info(f'{client_id} Task Search Stocks: {args}')
+                info = args['search']
                 res = search_stocks(args['search'])
             elif cmd == CmdEnum.KLINES.value:
                 # log.info(f'{client_id} Task Klines: {args}')
+                info = f"{args['code']} - {args['durationStr']} - {args['barSizeSetting']}"
                 res = klines(args['code'], args['durationStr'], args['barSizeSetting'], args['timeout'])
             elif cmd == CmdEnum.TICKS.value:
                 # log.info(f'{client_id} Task Ticks: {args}')
+                info = args['codes']
                 res = ticks(args['codes'])
             elif cmd == CmdEnum.STOCK_INFO.value:
                 # log.info(f'{client_id} Task Stock Info: {args}')
+                info = args['code']
                 res = stock_info(args['code'])
             elif cmd == CmdEnum.BALANCE.value:
                 # log.info(f'{client_id} Task Balance: {args}')
+                info = 'balance'
                 res = balance()
             elif cmd == CmdEnum.POSITIONS.value:
                 # log.info(f'{client_id} Task Positions: {args}')
+                info = args['code']
                 res = positions(args['code'])
             elif cmd == CmdEnum.ORDERS.value:
                 # log.info(f'{client_id} Task Orders: {args}')
+                info = args['code']
                 res = orders(args['code'], args['type'], args['amount'])
 
             rd.Robj().lpush(args['key'], json.dumps(res))
-            log.info(f'{client_id} Task CMD {cmd} run times : {time.time() - s_time}')
+            log.info(f'{client_id} Task CMD {cmd} [ {info} ] run times : {time.time() - s_time}')
         except Exception as e:
             log.error(f'{client_id} Task CMD {cmd} args {args} ERROR {e}')
             log.error(traceback.format_exc())
@@ -230,6 +238,6 @@ if __name__ == '__main__':
             start_client_num,
             mp_context=get_context("spawn")
     ) as executor:
-        executor.map(run_tasks, range(0, start_client_num))
+        executor.map(run_tasks, [11,12,13,14,15])
 
     # run_tasks(0)

@@ -243,11 +243,13 @@ class ExchangeDB(Exchange):
             sql += " and dt >= '%s'" % start_date
         if end_date is not None:
             sql += " and dt <= '%s'" % end_date
-        sql += ' order by dt desc'
+        if 'order' in args and args['order'] == 'asc':
+            sql += ' order by dt asc'
+        else:
+            sql += ' order by dt desc'
+        
         if args['limit'] is not None:
             sql += f" limit {args['limit']}"
-
-        # print(sql)
 
         db = g_pool_db.connection()
         cursor = db.cursor()
@@ -343,9 +345,9 @@ class ExchangeDB(Exchange):
 
 
 if __name__ == '__main__':
-    ex = ExchangeDB('a')
+    ex = ExchangeDB('us')
     # ticks = ex.ticks(['SHSE.000001'])
     # print(ticks)
 
-    klines = ex.klines('SZSE.000333', 'd')
+    klines = ex.klines('AAPL', 'd', start_date='1990-01-01 00:00:00', args={'limit': 10, 'order': 'asc'})
     print(klines.tail(20))

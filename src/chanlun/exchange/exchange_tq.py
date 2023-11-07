@@ -34,6 +34,9 @@ class ExchangeTq(Exchange):
         # Tick 返回对象
         self.res_ticks: Dict[str, Quote] = {}
         
+        # 设置时区
+        self.tz = pytz.timezone('Asia/Shanghai')
+        
         # 运行的子进程
         self.stop_thread = False
         self.t = threading.Thread(target=self.thread_run_tasks)
@@ -180,6 +183,7 @@ class ExchangeTq(Exchange):
         codes = []
         for c in ['FUTURE', 'CONT']:
             codes += self.get_api().query_quotes(ins_class=c)
+            # print(f'tq type {c} codes : {len(codes)}')
         infos = self.get_api().query_symbol_info(codes)
 
         for code in codes:
@@ -231,6 +235,8 @@ class ExchangeTq(Exchange):
         if klines is None:
             return None
         klines.loc[:, 'date'] = klines['datetime'].apply(lambda x: datetime.datetime.fromtimestamp(x / 1e9))
+        # 转换时区
+        klines['date'] = klines['date'].dt.tz_localize(self.tz)
         klines.loc[:, 'code'] = code
 
         return klines[['code', 'date', 'open', 'close', 'high', 'low', 'volume']]
@@ -486,19 +492,17 @@ class ExchangeTq(Exchange):
 if __name__ == '__main__':
     
     ex = ExchangeTq()
-    ex.close_task_thread()
-    ex.restart_task_thread()
-    ex.close_task_thread()
-    ex.close_api()
-    print('Done')
 
-    
-    # print(ex.all_stocks())
+    # print('all_stocks', len(ex.all_stocks()))
+    # for c in ['FUTURE', 'CONT']:
+    #     res = ex.get_api().query_quotes(ins_class=c)
+    #     print(c, len(res))
     
     # main_codes = ex.get_api().query_cont_quotes()
     # print(main_codes)
 
-    # klines = ex.klines('KQ.m@SHFE.ss', '1m')
+    klines = ex.klines('KQ.m@SHFE.ss', '10m')
+    print(klines.tail())
 
     # klines = klines[klines['date'] <= '2023-10-16 15:00:00']
     
@@ -506,6 +510,15 @@ if __name__ == '__main__':
 
     # tick = ex.ticks(['DCE.l2401'])
     # print(tick)
+
+    # ex.close_task_thread()
+    # ex.restart_task_thread()
+    ex.close_task_thread()
+    ex.close_api()
+    print('Done')
+
+    
+    
 
     # ex.close_api()
 

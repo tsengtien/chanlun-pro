@@ -284,7 +284,7 @@ def convert_futures_kline_frequency(klines: pd.DataFrame, to_f: str) -> pd.DataF
 
     # 直接使用 pandas 的 resample 方法进行合并周期
     period_maps = {
-        '1m': '1min', '3m': '3min', '5m': '5min', '6m': '6min', '10m': '10min', '15m': '15min',
+        '1m': '1min', '2m': '2min', '3m': '3min', '5m': '5min', '6m': '6min', '10m': '10min', '15m': '15min',
         'd': 'D', 'w': 'W', 'm': 'M'
     }
     if to_f in period_maps.keys():

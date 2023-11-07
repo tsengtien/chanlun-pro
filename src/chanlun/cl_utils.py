@@ -494,10 +494,12 @@ def cl_qstd(cd: ICL, line_type='xd', line_num: int = 5):
     qstd['up']['chart'] = {
         'x': [chart_up_start['date'], chart_up_end['date']],
         'y': [chart_up_start['val'], chart_up_end['val']],
+        'index': [chart_up_start['index'], chart_up_end['index']]
     }
     qstd['down']['chart'] = {
         'x': [chart_down_start['date'], chart_down_end['date']],
         'y': [chart_down_start['val'], chart_down_end['val']],
+        'index': [chart_down_start['index'], chart_down_start['index']]
     }
 
     # 计算当前价格和趋势线的位置关系
@@ -845,18 +847,48 @@ def klines_to_heikin_ashi_klines(ks: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == '__main__':
-    from chanlun.exchange.exchange_tdx import ExchangeTDX
+    from chanlun.exchange.exchange_db import ExchangeDB
+    from chanlun import cl
 
     market = 'a'
-    code = 'SZ.000802'
-    ex = ExchangeTDX()
+    code = 'SZ.000002'
+    ex = ExchangeDB(market)
     cl_config = query_cl_chart_config(market, code)
     klines = ex.klines(code, 'd')
 
-    cd = web_batch_get_cl_datas(market, code, {'d': klines}, cl_config)[0]
+    cd = cl.CL(code, 'd', cl_config).process_klines(klines)
+
+    qstd = cl_qstd(cd, 'bi', 5)
+    print(qstd)
+    def cal_distance(chart, x):
+        x1 = chart['one']['index']
+        y1 = chart['one']['val']
+        x2 = chart['two']['index']
+        y2 = chart['two']['val']
+        # 计算直线方程的斜率k和截距b
+        if x2 - x1 == 0:
+            return 0
+        k = (y2 - y1) / (x2 - x1) 
+        b = y1 - k * x1
+        # 计算直线方程
+        line_func = lambda x: k * x + b  
+        
+        # 计算距离,加入判断正负
+        y3_line = line_func(x[0])
+        if x[1] > y3_line:
+            distance = (x[1] - y3_line) / math.sqrt(k**2 + 1)
+        else:
+            distance = -(y3_line - x[1]) / math.sqrt(k**2 + 1)
+        return distance
+
+    bi = cd.get_bis()[-1]
+    x = [bi.end.k.k_index, bi.end.val]
+
+    print('up distance ', x, cal_distance(qstd['up'], x))
+    print('down distance ', x, cal_distance(qstd['down'], x))
 
     # tv_cd = cl_data_to_tv_chart(cd, cl_config)
     # print(tv_cd)
 
-    m_klines = klines_to_heikin_ashi_klines(klines)
-    print(m_klines.tail())
+    # m_klines = klines_to_heikin_ashi_klines(klines)
+    # print(m_klines.tail())

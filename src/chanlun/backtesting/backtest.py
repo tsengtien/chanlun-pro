@@ -95,6 +95,9 @@ class BackTest:
         """
         if self.save_file is None:
             return
+        
+        self.strategy.clear()
+        
         save_dict = {
             'save_file': self.save_file,
             'mode': self.mode,

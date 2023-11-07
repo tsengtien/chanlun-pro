@@ -225,8 +225,8 @@ def render_charts(title, cl_data: ICL, to_frequency: str = None, orders=None, co
     point_di = {'index': [], 'val': []}
     if config['chart_show_fx']:
         for fx in fxs:
-            if fx.ld() < 5:
-                continue
+            # if fx.ld() < 5:
+            #     continue
             if fx.type == 'ding':
                 point_ding['index'].append(fx.k.date)
                 point_ding['val'].append([fx.val, '强分型' if fx.ld() >= 5 else ''])
