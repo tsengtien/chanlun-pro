@@ -492,6 +492,7 @@
                 );
                 chart.dataReady(function() {
                     console.log('数据准备');
+                    obj_charts = {};
                     draw_chanlun();
                 });
                 widget.subscribe('onTick', function (d) {
@@ -801,7 +802,7 @@
                                 return true;
                             }
                             if (mmd['text'].search('B') > 0) {
-                                obj_charts['bcs'].push({
+                                obj_charts['mmds'].push({
                                     'time': mmd['points'].time,
                                     'key': key,
                                     'id': chart.createShape(mmd['points'], {
@@ -822,7 +823,7 @@
                                     }),
                                 });
                             } else {
-                                obj_charts['bcs'].push({
+                                obj_charts['mmds'].push({
                                     'time': mmd['points'].time,
                                     'key': key,
                                     'id': chart.createShape(mmd['points'], {
