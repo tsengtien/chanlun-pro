@@ -471,13 +471,13 @@
                     market = ticker.split(':')[0];
                     code = ticker.split(':')[1];
                     console.log(id + ' 标的变化：' + symbol['ticker']);
-                    obj_charts = {};
+                    clear_draw_chanlun();
                     render_zixuan_opts();
                     setTimeout(draw_chanlun, 1500);
                 });
                 chart.onIntervalChanged().subscribe(null, function (interval) {
                     set_local_data(market + '_interval_' + id, interval);
-                    obj_charts = {};
+                    clear_draw_chanlun();
                     console.log(id + '周期变化 : ' + interval);
                     setTimeout(draw_chanlun, 1500);
                 });
@@ -485,14 +485,14 @@
                     null,
                     function (d) {
                         console.log('数据重新加载');
-                        obj_charts = {};
+                        clear_draw_chanlun();
                         draw_chanlun();
                     },
                     true
                 );
                 chart.dataReady(function() {
                     console.log('数据准备');
-                    obj_charts = {};
+                    clear_draw_chanlun();
                     draw_chanlun();
                 });
                 widget.subscribe('onTick', function (d) {
@@ -505,6 +505,20 @@
                     draw_chanlun();
                 });
 
+                // 清除已经画的图
+                function clear_draw_chanlun() {
+                    for (const symbol_key in obj_charts) {
+                        for (const c_key in obj_charts[symbol_key]) {
+                            for (const i in obj_charts[symbol_key][c_key]) {
+                                var o = obj_charts[symbol_key][c_key][i];
+                                chart.removeEntity(o['id']);
+                            }
+                            obj_charts[symbol_key][c_key] = [];
+                        }
+                    }
+                }
+
+                // 画图
                 function draw_chanlun() {
                     const code_start = performance.now();
                     
